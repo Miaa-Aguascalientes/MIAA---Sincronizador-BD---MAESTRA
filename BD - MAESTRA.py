@@ -1,63 +1,212 @@
+# ==========================================
+# 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS
+# ==========================================
+from datetime import datetime, timedelta
 import time
-from datetime import datetime
+from zoneinfo import ZoneInfo
 import pandas as pd
 import pymysql
 import streamlit as st
 
-# Configuración de la página con tema oscuro personalizado
+ZONA_MEXICO = ZoneInfo("America/Mexico_City")
+
 st.set_page_config(
-    page_title="Sincronizador Cello - BD Madre", page_icon="🔄", layout="wide"
+    page_title="Sistema Scada - MIAA",
+    page_icon="https://www.miaa.mx/favicon.ico",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 st.markdown(
     """
     <style>
-    .main { background-color: #050a10; color: #00d4ff; }
-    .stSidebar { background-color: #0b1a29; }
-    h1, h2, h3 { color: #00ff00; }
-    .stMetric { background-color: #0b1a29; padding: 10px; border-radius: 5px; border: 1px solid #00d4ff; }
+        #MainMenu {visibility: hidden;}
+        header {visibility: hidden;}
+        footer {visibility: hidden;}
+        
+        [data-testid="stSidebar"] {
+            min-width: 280px !important;
+            max-width: 320px !important;
+            transform: none !important;
+            background-color: #0b1a29 !important;
+        }
+        [data-testid="collapsedControl"] {
+            display: none !important;
+        }
+        button[kind="header"] {
+            display: none !important;
+        }
+        
+        .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], .main, .block-container {
+            opacity: 1 !important;
+            filter: none !important;
+            pointer-events: auto !important;
+        }
+        [data-testid="stStatusWidget"] {
+            display: none !important;
+        }
+        
+        .block-container {
+            padding-top: 1rem !important;
+            padding-bottom: 0rem !important;
+        }
+        
+        header hr, .stApp > header + div hr, [data-testid="stHeader"] hr, hr {
+            display: none !important;
+        }
+        
+        .metric-card {
+            background-color: #1e293b;
+            border: 1px solid #334155;
+            padding: 15px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+        }
+        .metric-content {
+            display: flex;
+            flex-direction: column;
+        }
+        .metric-title {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        .metric-value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #f8fafc;
+        }
+        
+        .terminal-box {
+            background-color: #0b0f19;
+            border: 1px solid #22c55e;
+            color: #22c55e;
+            font-family: 'Courier New', Courier, monospace;
+            padding: 15px;
+            border-radius: 6px;
+            height: 420px;
+            overflow-y: scroll;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+        
+        [data-testid="stVerticalBlock"] [data-testid="stVerticalBlockBorderWrapper"] {
+            background-color: #0e1322 !important;
+            border: 1px solid #334155 !important;
+            border-radius: 8px !important;
+            padding: 15px !important;
+        }
     </style>
 """,
     unsafe_allow_html=True,
 )
 
-
-@st.cache_resource
-def get_connection(db_key):
-    """Establece conexión persistente con MySQL usando los secretos de Streamlit"""
-    cfg = st.secrets[db_key]
-    return pymysql.connect(
-        host=cfg["host"],
-        user=cfg["user"],
-        password=cfg["password"],
-        database=cfg["database"],
-        port=cfg.get("port", 3306),
-        cursorclass=pymysql.cursors.DictCursor,
-        autocommit=True,
-    )
+# ==========================================
+# 2. GESTIÓN DE LOGS
+# ==========================================
+if "logs" not in st.session_state:
+  st.session_state.logs = [
+      f"[{datetime.now(ZONA_MEXICO).strftime('%H:%M:%S')}] Sistema inicializado"
+      " correctamente. Módulo Cello ➔ BD_MADRE listo."
+  ]
 
 
-def ejecutar_sincronizacion():
-  """Extrae datos de bitacora_cello_datos, transforma el ID y los inserta en BD_MADRE"""
+def agregar_log(mensaje):
+  timestamp = datetime.now(ZONA_MEXICO).strftime("%H:%M:%S")
+  st.session_state.logs.insert(0, f"[{timestamp}] {mensaje}")
+  if len(st.session_state.logs) > 300:
+    st.session_state.logs.pop()
+
+
+# ==========================================
+# 3. CONEXIONES MYSQL
+# ==========================================
+def get_mysql_connection(db_key):
+  cfg = st.secrets[db_key]
+  conn = pymysql.connect(
+      host=cfg["host"],
+      user=cfg["user"],
+      password=cfg["password"],
+      database=cfg["database"],
+      port=cfg.get("port", 3306),
+      cursorclass=pymysql.cursors.DictCursor,
+      autocommit=True,
+      connect_timeout=30,
+      read_timeout=60,
+      write_timeout=60,
+  )
+  with conn.cursor() as cursor:
+    cursor.execute("SET SESSION wait_timeout = 28800;")
+    cursor.execute("SET SESSION interactive_timeout = 28800;")
+  return conn
+
+
+# ==========================================
+# 4. FUNCIÓN DE SINCRONIZACIÓN
+# ==========================================
+def ejecutar_sincronizacion_cello(
+    barra_progreso_placeholder=None,
+    texto_estado_placeholder=None,
+    consola_placeholder=None,
+):
+  def actualizar_progreso(valor_pct, mensaje):
+    agregar_log(mensaje)
+    if consola_placeholder is not None:
+      logs_html = "<br>".join(st.session_state.logs)
+      consola_placeholder.markdown(
+          f'<div class="terminal-box">{logs_html}</div>', unsafe_allow_html=True
+      )
+    if barra_progreso_placeholder is not None:
+      barra_progreso_placeholder.progress(
+          valor_pct,
+          text=(
+              f"Progreso Sincronización Cello: {int(valor_pct * 100)}% -"
+              f" {mensaje}"
+          ),
+      )
+    if texto_estado_placeholder is not None:
+      texto_estado_placeholder.markdown(
+          f"🔄 **{mensaje}** ({int(valor_pct * 100)}%)"
+      )
+    time.sleep(0.05)
+
+  actualizar_progreso(
+      0.20,
+      "[PASO 1/3] Conectando a base de datos origen (miaamx_telemetria)...",
+  )
+
   try:
-    conn_source = get_connection("source_db")
-    conn_target = get_connection("target_db")
+    conn_source = get_mysql_connection("source_db")
+    conn_target = get_mysql_connection("target_db")
 
-    # 1. Leer datos de la tabla origen
+    actualizar_progreso(
+        0.40,
+        "[PASO 2/3] Leyendo registros de la tabla origen"
+        " `bitacora_cello_datos`...",
+    )
     query_read = (
         "SELECT ID, FECHA_HORA_LOGGER, DISPOSITIVO, VARIABLE, VALOR FROM"
         " bitacora_cello_datos"
     )
     df = pd.read_sql(query_read, conn_source)
+    conn_source.close()
 
     if df.empty:
-      return 0, "No se encontraron registros en el origen."
+      actualizar_progreso(
+          1.0,
+          "[AVISO] La tabla `bitacora_cello_datos` no contiene registros para"
+          " sincronizar.",
+      )
+      return False
 
-    # 2. Transformar el campo ID (ej. 1 -> 1-A)
+    actualizar_progreso(
+        0.65,
+        f"[PASO 3/3] Transformando {len(df):,} registros (Añadiendo sufijo '-A'"
+        " al campo ID) e insertando en BD_MADRE...",
+    )
+
     df["ID"] = df["ID"].astype(str) + "-A"
 
-    # 3. Insertar registros en la tabla destino (BD_MADRE)
-    # Usamos INSERT IGNORE o manejo de duplicados para evitar errores si ya existen
     cursor = conn_target.cursor()
     query_insert = """
             INSERT INTO BD_MADRE (ID, FECHA_HORA_LOGGER, DISPOSITIVO, VARIABLE, VALOR) 
@@ -70,97 +219,364 @@ def ejecutar_sincronizacion():
     tuples = [tuple(x) for x in df.to_numpy()]
     cursor.executemany(query_insert, tuples)
     cursor.close()
+    conn_target.close()
 
-    return len(df), f"Sincronización exitosa de {len(df)} registros."
+    actualizar_progreso(
+        1.0,
+        f"🎉 [CICLO EXITOSO] Se sincronizaron y transformaron {len(df):,}"
+        " registros correctamente hacia BD_MADRE.",
+    )
+    return True
 
-  except Exception as e:
-    return -1, str(e)
+  except Exception as ex:
+    actualizar_progreso(
+        1.0, f"[ERROR CRÍTICO] Falló la sincronización de Cello: {ex}"
+    )
+    return False
 
 
-# Interfaz Gráfica en Streamlit
-st.title("⚡ Sincronizador Automático: Cello ➔ BD_MADRE")
-st.markdown("---")
+# ==========================================
+# 5. TEMPORIZADOR Y RELOJ
+# ==========================================
+def calcular_siguiente_tiempo_reloj(minutos_intervalo):
+  ahora = datetime.now(ZONA_MEXICO)
+  minuto_actual = ahora.minute
+  segundo_actual = ahora.second
 
-# Barra lateral para controles y temporizador
-st.sidebar.header("⚙️ Configuración de Ejecución")
-intervalo_minutos = st.sidebar.selectbox(
-    "Selecciona el intervalo del reloj ejecutor:",
-    options=[1, 5, 10, 15, 30, 60],
-    index=1,  # Por defecto 5 minutos
-    format_func=lambda x: f"Cada {x} minuto(s)",
+  residuo = minuto_actual % minutos_intervalo
+  minutos_faltantes = (
+      minutos_intervalo - residuo
+      if residuo != 0
+      else (0 if segundo_actual == 0 else minutos_intervalo)
+  )
+
+  if minutos_faltantes == 0 and segundo_actual > 0:
+    minutos_faltantes = minutos_intervalo
+
+  siguiente_tiempo = (
+      ahora.replace(second=0, microsecond=0)
+      + timedelta(minutes=minutos_faltantes)
+  )
+  total_segundos_hasta_siguiente = (
+      siguiente_tiempo - ahora
+  ).total_seconds()
+
+  return siguiente_tiempo, int(total_segundos_hasta_siguiente)
+
+
+if "is_running" not in st.session_state:
+  st.session_state.is_running = False
+if "next_run_time" not in st.session_state:
+  st.session_state.next_run_time = None
+if "intervalo_minutos_sel" not in st.session_state:
+  st.session_state.intervalo_minutos_sel = 5
+
+# ==========================================
+# 6. BARRA LATERAL (IDÉNTICA A TU IMAGEN)
+# ==========================================
+with st.sidebar:
+  st.image(
+      "https://raw.githubusercontent.com/Miaa-Aguascalientes/Logos/38504978c8f77a4dac38ad476f74dbdee6af2cad/LogoMIAA.svg",
+      use_container_width=True,
+  )
+  st.markdown("🚰 Panel Levantamientos MIAA")
+  st.markdown("---")
+  st.markdown("⚙ Configuración")
+
+  opciones_intervalo = {
+      "Cada 1 minuto": 1,
+      "Cada 5 minutos": 5,
+      "Cada 10 minutos": 10,
+      "Cada 15 minutos": 15,
+      "Cada 30 minutos": 30,
+      "Cada hora": 60,
+  }
+  intervalo_sel = st.selectbox(
+      "Intervalo de sincronización", list(opciones_intervalo.keys())
+  )
+  minutos_seleccionados = opciones_intervalo[intervalo_sel]
+
+  col_s1, col_s2 = st.columns(2)
+  with col_s1:
+    st.markdown(
+        """
+            <style>
+            div.stButton > button[kind="primary"] {
+                background-color: #ff4b4b !important;
+                color: white !important;
+                border: none !important;
+            }
+            </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    btn_iniciar = st.button("INICIAR", type="primary", use_container_width=True)
+  with col_s2:
+    btn_parar = st.button("PARAR", type="secondary", use_container_width=True)
+
+  if btn_iniciar:
+    st.session_state.is_running = True
+    st.session_state.intervalo_minutos_sel = minutos_seleccionados
+    sig_tiempo, _ = calcular_siguiente_tiempo_reloj(minutos_seleccionados)
+    st.session_state.next_run_time = sig_tiempo
+    agregar_log(
+        f"▶ Temporizador activado. Próxima ejecución sincronizada al reloj a"
+        f" las {sig_tiempo.strftime('%H:%M:%S')}."
+    )
+    st.success(
+        f"¡Temporizador iniciado! Siguiente ejecución a las"
+        f" {sig_tiempo.strftime('%H:%M:%S')}."
+    )
+    st.rerun()
+
+  if btn_parar:
+    st.session_state.is_running = False
+    st.session_state.next_run_time = None
+    agregar_log("⏹ Temporizador detenido manualmente por el usuario.")
+    st.warning("Temporizador detenido.")
+    st.rerun()
+
+# ==========================================
+# 7. INTERFAZ PRINCIPAL
+# ==========================================
+st.markdown(
+    """
+    <div style="text-align: center; margin-top: -20px; margin-bottom: 10px;">
+        <h2 style="color: #f8fafc; font-weight: 700;">MIAA - Sincronizador de Tablas (Cello ➔ BD_MADRE)</h2>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-auto_run = st.sidebar.toggle("Activar Ejecución Automática", value=False)
-btn_manual = st.sidebar.button("🚀 Sincronizar Ahora (Manual)")
+with st.expander(
+    "🔌 Diagnóstico y Comprobación de Conexión a Bases de Datos", expanded=False
+):
+  col_d1, col_d2 = st.columns(2)
 
-col1, col2 = st.columns(2)
-with col1:
-  st.subheader("📊 Estado del Proceso")
-  status_placeholder = st.empty()
-with col2:
-  st.subheader("🕒 Última Ejecución")
-  time_placeholder = st.empty()
+  with col_d1:
+    st.markdown("##### 🟢 Base de Datos Origen (`miaamx_telemetria`)")
+    try:
+      conn_test_src = get_mysql_connection("source_db")
+      cursor_src = conn_test_src.cursor()
+      cursor_src.execute("SELECT COUNT(*) as total FROM bitacora_cello_datos")
+      res_src = cursor_src.fetchone()
+      cursor_src.close()
+      conn_test_src.close()
+      st.success(
+          f"Conexión exitosa a **miaa.mx** | Tabla `bitacora_cello_datos`"
+          f" accesible ({res_src['total']:,} registros)."
+      )
+    except Exception as e:
+      st.error(f"❌ Error al conectar con origen (`miaamx_telemetria`): {e}")
 
-# Contenedor para mostrar registros procesados recientemente
-st.markdown("---")
-st.subheader("📋 Vista Previa de Datos Origen (`bitacora_cello_datos`)")
-table_placeholder = st.empty()
+  with col_d2:
+    st.markdown("##### 🔵 Base de Datos Destino (`miaamx_telemetria2`)")
+    try:
+      conn_test_tgt = get_mysql_connection("target_db")
+      cursor_tgt = conn_test_tgt.cursor()
+      cursor_tgt.execute("SELECT COUNT(*) as total FROM BD_MADRE")
+      res_tgt = cursor_tgt.fetchone()
+      cursor_tgt.close()
+      conn_test_tgt.close()
+      st.success(
+          f"Conexión exitosa a **miaa.mx** | Tabla `BD_MADRE` accesible"
+          f" ({res_tgt['total']:,} registros)."
+      )
+    except Exception as e:
+      st.error(f"❌ Error al conectar con destino (`miaamx_telemetria2`): {e}")
 
-try:
-  conn_s = get_connection("source_db")
-  df_preview = pd.read_sql(
-      "SELECT * FROM bitacora_cello_datos ORDER BY FECHA_HORA_LOGGER DESC LIMIT"
-      " 50",
-      conn_s,
+st.markdown(
+    "<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True
+)
+
+st.markdown("#### 🔄 Estado y Progreso del Sincronizador")
+estado_ejecucion_placeholder = st.empty()
+barra_progreso_placeholder = st.empty()
+
+col_consola, col_manual = st.columns([2, 1], gap="medium")
+
+with col_consola:
+  st.markdown("#### 🖥️ Consola de Registros del Sistema")
+  consola_placeholder = st.empty()
+  logs_html = "<br>".join(st.session_state.logs)
+  consola_placeholder.markdown(
+      f'<div class="terminal-box">{logs_html}</div>', unsafe_allow_html=True
   )
-  table_placeholder.dataframe(df_preview, use_container_width=True)
-except Exception as ex:
-  table_placeholder.error(
-      f"No se pudo cargar la vista previa de la base de datos origen: {ex}"
+
+with col_manual:
+  st.markdown("#### ⚡ Ejecución Manual")
+  with st.container(border=True):
+    st.markdown(
+        "<p style='font-size: 13px; color: #94a3b8;'>Puedes forzar la"
+        " ejecución inmediata de la transferencia de datos en cualquier"
+        " momento.</p>",
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "Sincronizar Ahora",
+        type="primary",
+        key="btn_sinc_manual",
+        use_container_width=True,
+    ):
+      ejecutar_sincronizacion_cello(
+          barra_progreso_placeholder,
+          estado_ejecucion_placeholder,
+          consola_placeholder,
+      )
+
+if st.session_state.is_running and st.session_state.next_run_time:
+  ahora = datetime.now(ZONA_MEXICO)
+  if ahora >= st.session_state.next_run_time:
+    ejecutar_sincronizacion_cello(
+        barra_progreso_placeholder,
+        estado_ejecucion_placeholder,
+        consola_placeholder,
+    )
+    sig_tiempo, _ = calcular_siguiente_tiempo_reloj(
+        st.session_state.intervalo_minutos_sel
+    )
+    st.session_state.next_run_time = sig_tiempo
+    st.rerun()
+  else:
+    segundos_totales_intervalo = st.session_state.intervalo_minutos_sel * 60
+    segundos_restantes = max(
+        0,
+        int(
+            (
+                st.session_state.next_run_time
+                - datetime.now(ZONA_MEXICO)
+            ).total_seconds()
+        ),
+    )
+
+    progreso_espera = max(
+        0.0,
+        min(
+            1.0,
+            1.0 - (segundos_restantes / float(segundos_totales_intervalo)),
+        ),
+    )
+
+    mins_r = segundos_restantes // 60
+    secs_r = segundos_restantes % 60
+    tiempo_formateado = f"{mins_r:02d}:{secs_r:02d}"
+
+    estado_ejecucion_placeholder.markdown(
+        f"⏳ **Temporizador activo.** Próxima ejecución automática a las"
+        f" **{st.session_state.next_run_time.strftime('%H:%M:%S')}** (Faltan"
+        f" **{tiempo_formateado}**)"
+    )
+    barra_progreso_placeholder.progress(
+        progreso_espera,
+        text=(
+            f"Tiempo en espera para ejecución: {int(progreso_espera * 100)}%"
+            f" completado — Restan {tiempo_formateado}"
+        ),
+    )
+
+    time.sleep(1)
+    st.rerun()
+else:
+  estado_ejecucion_placeholder.markdown(
+      "⏸️ **Temporizador inactivo.** Presiona **INICIAR** en la barra lateral."
+  )
+  barra_progreso_placeholder.progress(
+      0, text="Listo para iniciar temporizador..."
   )
 
-# Lógica de Ejecución Manual
-if btn_manual:
-  with st.spinner("Ejecutando transferencia y transformación de datos..."):
-    count, msg = ejecutar_sincronizacion()
-    if count >= 0:
-      status_placeholder.success(f"✅ {msg}")
-    else:
-      status_placeholder.error(f"❌ Error: {msg}")
-    time_placeholder.info(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
 
-# Lógica del Reloj Ejecutor Automático
-if auto_run:
-  intervalo_segundos = intervalo_minutos * 60
-  status_placeholder.info(
-      f"🤖 Reloj automático activo. Sincronizando cada {intervalo_minutos}"
-      " minuto(s)..."
+# ==========================================
+# 8. GESTIÓN DE BORRADO DE BD_MADRE
+# ==========================================
+with st.container(border=True):
+  st.markdown(
+      """
+        <h4 style="margin-top: 0; color: #ef4444; font-size: 18px; display: flex; align-items: center;">
+            🗑️ <span style="margin-left: 8px;">Gestión de Borrado: Vaciar Tabla BD_MADRE</span>
+        </h4>
+        <p style="font-size: 13px; color: #94a3b8; margin-bottom: 15px;">
+            Esta acción eliminará <b>absolutamente todos los registros</b> almacenados actualmente en la tabla destino <code>BD_MADRE</code> de la base de datos <code>miaamx_telemetria2</code>. 
+        </p>
+      """,
+      unsafe_allow_html=True,
   )
 
-  # Bucle de ejecución periódica controlada por Streamlit
-  while auto_run:
-    count, msg = ejecutar_sincronizacion()
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  confirmar_borrado_total = st.checkbox(
+      "⚠️ Confirmo que deseo ELIMINAR TODOS LOS DATOS de la tabla BD_MADRE de"
+      " forma permanente",
+      key="chk_confirmar_borrado_bd_madre",
+  )
 
-    if count >= 0:
-      status_placeholder.success(
-          f"✅ [Auto {timestamp}] Sincronizados {count} registros correctamente."
+  col_btn1, col_btn2 = st.columns([1, 2])
+  with col_btn1:
+    btn_ejecutar_borrado = st.button(
+        "🗑️ Vaciar Tabla BD_MADRE",
+        type="primary",
+        key="btn_vaciar_bd_madre",
+        use_container_width=True,
+    )
+
+  if btn_ejecutar_borrado:
+    if not confirmar_borrado_total:
+      st.error(
+          "Debes marcar la casilla de confirmación para autorizar el vaciado"
+          " total de la tabla."
       )
     else:
-      status_placeholder.error(f"❌ [Auto {timestamp}] Error: {msg}")
+      try:
+        conn_target = get_mysql_connection("target_db")
+        cursor = conn_target.cursor()
+        cursor.execute("DELETE FROM BD_MADRE")
+        conn_target.commit()
+        cursor.close()
+        conn_target.close()
 
-    time_placeholder.info(timestamp)
+        agregar_log(
+            "🗑️ [BORRADO MASIVO] Se vació por completo la tabla BD_MADRE en"
+            " miaamx_telemetria2."
+        )
+        st.success(
+            "¡Se han eliminado correctamente todos los registros de la tabla"
+            " BD_MADRE!"
+        )
+        time.sleep(1)
+        st.rerun()
 
-    # Cuenta regresiva visual o espera en bloques para no congelar la app bruscamente
-    tiempo_restante = intervalo_segundos
-    progress_bar = st.sidebar.progress(0)
+      except Exception as e:
+        st.error(f"❌ Error al intentar vaciar la tabla BD_MADRE: {e}")
 
-    for i in range(intervalo_segundos):
-      time.sleep(1)
-      # Actualizar barra de progreso lateral
-      progreso = (i + 1) / intervalo_segundos
-      progress_bar.progress(progreso)
-      # Nota: Si el usuario desactiva el toggle, el script se re-ejecutará al interactuar,
-      # pero para un ciclo continuo exacto se recomienda desplegar en Streamlit Community Cloud
-      # o servidor local con soporte de bucles largos.
-    progress_bar.empty()
+st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
+
+# ==========================================
+# 9. VISTA PREVIA DE TABLAS
+# ==========================================
+st.markdown("#### 📋 Vista Previa de Datos (Origen vs Destino)")
+tab_origen, tab_destino = st.tabs(
+    ["📊 Origen: bitacora_cello_datos", "🎯 Destino: BD_MADRE"]
+)
+
+with tab_origen:
+  try:
+    conn_s = get_mysql_connection("source_db")
+    df_src_prev = pd.read_sql(
+        "SELECT * FROM bitacora_cello_datos ORDER BY FECHA_HORA_LOGGER DESC LIMIT"
+        " 100",
+        conn_s,
+    )
+    conn_s.close()
+    st.dataframe(df_src_prev, use_container_width=True, height=350)
+  except Exception as e:
+    st.warning(f"No se pudo cargar la vista previa de la tabla origen: {e}")
+
+with tab_destino:
+  try:
+    conn_t = get_mysql_connection("target_db")
+    df_tgt_prev = pd.read_sql(
+        "SELECT * FROM BD_MADRE ORDER BY FECHA_HORA_LOGGER DESC LIMIT 100",
+        conn_t,
+    )
+    conn_t.close()
+    st.dataframe(df_tgt_prev, use_container_width=True, height=350)
+  except Exception as e:
+    st.warning(f"No se pudo cargar la vista previa de la tabla destino: {e}")
