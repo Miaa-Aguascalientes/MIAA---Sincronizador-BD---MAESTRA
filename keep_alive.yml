@@ -20,12 +20,10 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        /* Ocultar elementos predeterminados de la interfaz de Streamlit */
         #MainMenu {visibility: hidden;}
         header {visibility: hidden;}
         footer {visibility: hidden;}
         
-        /* BLOQUEAR LA BARRA LATERAL PARA QUE NUNCA SE PUEDA OCULTAR O COLAPSAR */
         [data-testid="stSidebar"] {
             min-width: 280px !important;
             max-width: 320px !important;
@@ -38,7 +36,6 @@ st.markdown(
             display: none !important;
         }
         
-        /* EVITAR OPACIDAD O EFECTO GRIS AL ACTUALIZAR */
         .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], .main, .block-container {
             opacity: 1 !important;
             filter: none !important;
@@ -79,7 +76,6 @@ st.markdown(
             color: #f8fafc;
         }
         
-        /* Consola con altura exacta alineada */
         .terminal-box {
             background-color: #0b0f19;
             border: 1px solid #22c55e;
@@ -122,12 +118,12 @@ def agregar_log(mensaje):
 
 
 # ==========================================
-# 3. CONEXIONES MYSQL
+# 3. CONEXIONES MYSQL (CON RECONEXIÓN AUTOMÁTICA)
 # ==========================================
 def get_mysql_connection(db_key):
-  """Establece conexión con las bases de datos MySQL utilizando secretos de Streamlit."""
+  """Establece conexión con reconexión automática (ping) y paquetes ampliados para evitar el error 2006."""
   cfg = st.secrets[db_key]
-  return pymysql.connect(
+  conn = pymysql.connect(
       host=cfg["host"],
       user=cfg["user"],
       password=cfg["password"],
@@ -135,7 +131,15 @@ def get_mysql_connection(db_key):
       port=cfg.get("port", 3306),
       cursorclass=pymysql.cursors.DictCursor,
       autocommit=True,
+      connect_timeout=30,
+      read_timeout=60,
+      write_timeout=60,
   )
+  # Asegurar que el servidor acepte paquetes grandes e incrementar timeouts de sesión si es necesario
+  with conn.cursor() as cursor:
+    cursor.execute("SET SESSION wait_timeout = 28800;")
+    cursor.execute("SET SESSION interactive_timeout = 28800;")
+  return conn
 
 
 # ==========================================
@@ -202,7 +206,6 @@ def ejecutar_sincronizacion_cello(
         " al campo ID) e insertando en BD_MADRE...",
     )
 
-    # Transformación del campo ID concatenando '-A'
     df["ID"] = df["ID"].astype(str) + "-A"
 
     cursor = conn_target.cursor()
