@@ -6,8 +6,6 @@ import time
 from zoneinfo import ZoneInfo
 import pandas as pd
 import pymysql
-import requests
-from sqlalchemy import create_engine, text
 import streamlit as st
 
 ZONA_MEXICO = ZoneInfo("America/Mexico_City")
@@ -89,7 +87,7 @@ st.markdown(
             font-family: 'Courier New', Courier, monospace;
             padding: 15px;
             border-radius: 6px;
-            height: 505px;
+            height: 420px;
             overflow-y: scroll;
             font-size: 13px;
             line-height: 1.4;
@@ -99,8 +97,6 @@ st.markdown(
             background-color: #0e1322 !important;
             border: 1px solid #334155 !important;
             border-radius: 8px !important;
-            height: 567px !important;
-            overflow-y: auto !important;
             padding: 15px !important;
         }
     </style>
@@ -126,19 +122,8 @@ def agregar_log(mensaje):
 
 
 # ==========================================
-# 3. CONEXIONES Y CONSULTAS (MYSQL Y POSTGRES)
+# 3. CONEXIONES MYSQL
 # ==========================================
-BASE_URL = "https://prelec.miaa.mx"
-URL_LOGIN_CORRECTA = "/auth/login"
-URL_INSTALACIONES = "https://prelec.miaa.mx/msvc-tecnica/medidores/instalaciones"
-
-
-def obtener_motor_postgres():
-  pg = st.secrets["postgres"]
-  connection_string = f"postgresql+psycopg2://{pg['user']}:{pg['password']}@{pg['host']}:{pg['port']}/{pg['database']}"
-  return create_engine(connection_string)
-
-
 def get_mysql_connection(db_key):
   """Establece conexión con las bases de datos MySQL utilizando secretos de Streamlit."""
   cfg = st.secrets[db_key]
@@ -151,20 +136,6 @@ def get_mysql_connection(db_key):
       cursorclass=pymysql.cursors.DictCursor,
       autocommit=True,
   )
-
-
-@st.cache_data(ttl=600)
-def obtener_total_registros():
-  try:
-    engine_pg = obtener_motor_postgres()
-    with engine_pg.connect() as conn:
-      result = conn.execute(
-          text('SELECT COUNT(*) FROM "Usuarios"."usuarios_miaa_conmedidor"')
-      )
-      return result.scalar()
-  except Exception as e:
-    agregar_log(f"⚠️ [AVISO DB] No se pudo obtener el conteo de registros: {e}")
-    return 0
 
 
 # ==========================================
@@ -298,10 +269,8 @@ if "next_run_time" not in st.session_state:
 if "intervalo_minutos_sel" not in st.session_state:
   st.session_state.intervalo_minutos_sel = 5
 
-total_registros_db = obtener_total_registros()
-
 # ==========================================
-# 6. BARRA LATERAL IZQUIERDA (SIDEBAR - NUNCA SE OCULTA)
+# 6. BARRA LATERAL IZQUIERDA (SIDEBAR)
 # ==========================================
 with st.sidebar:
   st.image(
@@ -365,63 +334,45 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-col_ind1, col_ind2, col_ind3, col_ind4 = st.columns(4)
+# ==========================================
+# COMPROBACIÓN DE CONEXIÓN A AMBAS BASES DE DATOS
+# ==========================================
+with st.expander(
+    "🔌 Diagnóstico y Comprobación de Conexión a Bases de Datos", expanded=True
+):
+  col_d1, col_d2 = st.columns(2)
 
-with col_ind1:
-  st.markdown(
-      """
-        <div class="metric-card">
-            <div style="font-size: 28px; margin-right: 15px;">🔄</div>
-            <div class="metric-content">
-                <div class="metric-title">ORIGEN</div>
-                <div class="metric-value" style="font-size: 15px; margin-top: 2px;">bitacora_cello_datos</div>
-            </div>
-        </div>
-    """,
-      unsafe_allow_html=True,
-  )
+  with col_d1:
+    st.markdown("##### 🟢 Base de Datos Origen (`miaamx_telemetria`)")
+    try:
+      conn_test_src = get_mysql_connection("source_db")
+      cursor_src = conn_test_src.cursor()
+      cursor_src.execute("SELECT COUNT(*) as total FROM bitacora_cello_datos")
+      res_src = cursor_src.fetchone()
+      cursor_src.close()
+      conn_test_src.close()
+      st.success(
+          f"Conexión exitosa a **miaa.mx** | Tabla `bitacora_cello_datos`"
+          f" accesible ({res_src['total']:,} registros)."
+      )
+    except Exception as e:
+      st.error(f"❌ Error al conectar con origen (`miaamx_telemetria`): {e}")
 
-with col_ind2:
-  st.markdown(
-      """
-        <div class="metric-card">
-            <div style="font-size: 28px; margin-right: 15px;">🎯</div>
-            <div class="metric-content">
-                <div class="metric-title">DESTINO</div>
-                <div class="metric-value" style="font-size: 15px; margin-top: 2px;">BD_MADRE</div>
-            </div>
-        </div>
-    """,
-      unsafe_allow_html=True,
-  )
-
-with col_ind3:
-  st.markdown(
-      """
-        <div class="metric-card">
-            <div style="font-size: 28px; margin-right: 15px;">⚙️</div>
-            <div class="metric-content">
-                <div class="metric-title">TRANSFORMACIÓN ID</div>
-                <div class="metric-value" style="font-size: 15px; margin-top: 2px;">ID + "-A" (Ej: 1-A)</div>
-            </div>
-        </div>
-    """,
-      unsafe_allow_html=True,
-  )
-
-with col_ind4:
-  st.markdown(
-      """
-        <div class="metric-card">
-            <div style="font-size: 28px; margin-right: 15px;">🚀</div>
-            <div class="metric-content">
-                <div class="metric-title">ESTADO FUTURO</div>
-                <div class="metric-value" style="font-size: 15px; margin-top: 2px;">Soporte Multitablas</div>
-            </div>
-        </div>
-    """,
-      unsafe_allow_html=True,
-  )
+  with col_d2:
+    st.markdown("##### 🔵 Base de Datos Destino (`miaamx_telemetria2`)")
+    try:
+      conn_test_tgt = get_mysql_connection("target_db")
+      cursor_tgt = conn_test_tgt.cursor()
+      cursor_tgt.execute("SELECT COUNT(*) as total FROM BD_MADRE")
+      res_tgt = cursor_tgt.fetchone()
+      cursor_tgt.close()
+      conn_test_tgt.close()
+      st.success(
+          f"Conexión exitosa a **miaa.mx** | Tabla `BD_MADRE` accesible"
+          f" ({res_tgt['total']:,} registros)."
+      )
+    except Exception as e:
+      st.error(f"❌ Error al conectar con destino (`miaamx_telemetria2`): {e}")
 
 st.markdown(
     "<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True
@@ -525,7 +476,69 @@ else:
 st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
 
 # ==========================================
-# 8. VISTA PREVIA DE TABLAS
+# 8. GESTIÓN DE BORRADO DE BD_MADRE
+# ==========================================
+with st.container(border=True):
+  st.markdown(
+      """
+        <h4 style="margin-top: 0; color: #ef4444; font-size: 18px; display: flex; align-items: center;">
+            🗑️ <span style="margin-left: 8px;">Gestión de Borrado: Vaciar Tabla BD_MADRE</span>
+        </h4>
+        <p style="font-size: 13px; color: #94a3b8; margin-bottom: 15px;">
+            Esta acción eliminará <b>absolutamente todos los registros</b> almacenados actualmente en la tabla destino <code>BD_MADRE</code> de la base de datos <code>miaamx_telemetria2</code>. 
+        </p>
+      """,
+      unsafe_allow_html=True,
+  )
+
+  confirmar_borrado_total = st.checkbox(
+      "⚠️ Confirmo que deseo ELIMINAR TODOS LOS DATOS de la tabla BD_MADRE de"
+      " forma permanente",
+      key="chk_confirmar_borrado_bd_madre",
+  )
+
+  col_btn1, col_btn2 = st.columns([1, 2])
+  with col_btn1:
+    btn_ejecutar_borrado = st.button(
+        "🗑️ Vaciar Tabla BD_MADRE",
+        type="primary",
+        key="btn_vaciar_bd_madre",
+        use_container_width=True,
+    )
+
+  if btn_ejecutar_borrado:
+    if not confirmar_borrado_total:
+      st.error(
+          "Debes marcar la casilla de confirmación para autorizar el vaciado"
+          " total de la tabla."
+      )
+    else:
+      try:
+        conn_target = get_mysql_connection("target_db")
+        cursor = conn_target.cursor()
+        cursor.execute("DELETE FROM BD_MADRE")
+        conn_target.commit()
+        cursor.close()
+        conn_target.close()
+
+        agregar_log(
+            "🗑️ [BORRADO MASIVO] Se vació por completo la tabla BD_MADRE en"
+            " miaamx_telemetria2."
+        )
+        st.success(
+            "¡Se han eliminado correctamente todos los registros de la tabla"
+            " BD_MADRE!"
+        )
+        time.sleep(1)
+        st.rerun()
+
+      except Exception as e:
+        st.error(f"❌ Error al intentar vaciar la tabla BD_MADRE: {e}")
+
+st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
+
+# ==========================================
+# 9. VISTA PREVIA DE TABLAS
 # ==========================================
 st.markdown("#### 📋 Vista Previa de Datos (Origen vs Destino)")
 tab_origen, tab_destino = st.tabs(
