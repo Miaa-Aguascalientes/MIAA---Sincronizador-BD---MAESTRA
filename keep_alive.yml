@@ -28,6 +28,7 @@ st.markdown(
             min-width: 280px !important;
             max-width: 320px !important;
             transform: none !important;
+            background-color: #0b1a29 !important;
         }
         [data-testid="collapsedControl"] {
             display: none !important;
@@ -121,7 +122,6 @@ def agregar_log(mensaje):
 # 3. CONEXIONES MYSQL (CON RECONEXIÓN AUTOMÁTICA)
 # ==========================================
 def get_mysql_connection(db_key):
-  """Establece conexión con reconexión automática (ping) y paquetes ampliados para evitar el error 2006."""
   cfg = st.secrets[db_key]
   conn = pymysql.connect(
       host=cfg["host"],
@@ -135,7 +135,6 @@ def get_mysql_connection(db_key):
       read_timeout=60,
       write_timeout=60,
   )
-  # Asegurar que el servidor acepte paquetes grandes e incrementar timeouts de sesión si es necesario
   with conn.cursor() as cursor:
     cursor.execute("SET SESSION wait_timeout = 28800;")
     cursor.execute("SET SESSION interactive_timeout = 28800;")
@@ -273,16 +272,16 @@ if "intervalo_minutos_sel" not in st.session_state:
   st.session_state.intervalo_minutos_sel = 5
 
 # ==========================================
-# 6. BARRA LATERAL IZQUIERDA (SIDEBAR)
+# 6. BARRA LATERAL (PANEL LEVANTAMIENTOS MIAA)
 # ==========================================
 with st.sidebar:
   st.image(
       "https://raw.githubusercontent.com/Miaa-Aguascalientes/Logos/38504978c8f77a4dac38ad476f74dbdee6af2cad/LogoMIAA.svg",
       use_container_width=True,
   )
-  st.markdown("### 🚰 Panel Sincronizador MIAA")
+  st.markdown("🚰 Panel Levantamientos MIAA")
   st.markdown("---")
-  st.markdown("#### ⚙ Configuración")
+  st.markdown("⚙ Configuración")
 
   opciones_intervalo = {
       "Cada 1 minuto": 1,
@@ -299,6 +298,18 @@ with st.sidebar:
 
   col_s1, col_s2 = st.columns(2)
   with col_s1:
+    st.markdown(
+        """
+            <style>
+            div.stButton > button[kind="primary"] {
+                background-color: #ff4b4b !important;
+                color: white !important;
+                border: none !important;
+            }
+            </style>
+        """,
+        unsafe_allow_html=True,
+    )
     btn_iniciar = st.button("INICIAR", type="primary", use_container_width=True)
   with col_s2:
     btn_parar = st.button("PARAR", type="secondary", use_container_width=True)
@@ -326,7 +337,7 @@ with st.sidebar:
     st.rerun()
 
 # ==========================================
-# 7. INTERFAZ PRINCIPAL Y BARRAS DE PROGRESO
+# 7. INTERFAZ PRINCIPAL
 # ==========================================
 st.markdown(
     """
@@ -337,11 +348,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ==========================================
-# COMPROBACIÓN DE CONEXIÓN A AMBAS BASES DE DATOS
-# ==========================================
 with st.expander(
-    "🔌 Diagnóstico y Comprobación de Conexión a Bases de Datos", expanded=True
+    "🔌 Diagnóstico y Comprobación de Conexión a Bases de Datos", expanded=False
 ):
   col_d1, col_d2 = st.columns(2)
 
