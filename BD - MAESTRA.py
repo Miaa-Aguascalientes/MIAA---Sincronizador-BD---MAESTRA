@@ -201,8 +201,8 @@ def ejecutar_sincronizacion_cello(
 
     actualizar_progreso(
         0.65,
-        "[PASO 3/3] Transformando registros (ID con '-A' y limpieza de"
-        " variables) e insertando en BD_MADRE...",
+        "[PASO 3/3] Aplicando transformaciones (ID con '-A', limpieza de"
+        " variables y formato de ceros en VALOR) e insertando en BD_MADRE...",
     )
 
     # 1. Transformación del ID concatenando '-A'
@@ -220,6 +220,17 @@ def ejecutar_sincronizacion_cello(
         .str.replace("Volt_baterÃ­a", "Volt_bateria", regex=False)
         .str.replace("Volt_baterÃ-a", "Volt_bateria", regex=False)
     )
+
+    # 3. Añadir un cero antes del punto si el VALOR empieza con punto (ej. .1848 ➔ 0.1848)
+    def formatear_valor(val):
+      if pd.isna(val):
+        return val
+      val_str = str(val).strip()
+      if val_str.startswith("."):
+        return "0" + val_str
+      return val_str
+
+    df["VALOR"] = df["VALOR"].apply(formatear_valor)
 
     cursor = conn_target.cursor()
     query_insert = """
