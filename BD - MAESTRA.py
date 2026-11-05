@@ -142,7 +142,7 @@ def get_mysql_connection(db_key):
 
 
 # ==========================================
-# 4. FUNCIÓN DE SINCRONIZACIÓN
+# 4. FUNCIÓN DE SINCRONIZACIÓN Y TRANSFORMACIÓN
 # ==========================================
 def ejecutar_sincronizacion_cello(
     barra_progreso_placeholder=None,
@@ -201,11 +201,25 @@ def ejecutar_sincronizacion_cello(
 
     actualizar_progreso(
         0.65,
-        f"[PASO 3/3] Transformando {len(df):,} registros (Añadiendo sufijo '-A'"
-        " al campo ID) e insertando en BD_MADRE...",
+        "[PASO 3/3] Transformando registros (ID con '-A' y limpieza de"
+        " variables) e insertando en BD_MADRE...",
     )
 
+    # 1. Transformación del ID concatenando '-A'
     df["ID"] = df["ID"].astype(str) + "-A"
+
+    # 2. Reemplazo y limpieza de los textos de la columna VARIABLE
+    df["VARIABLE"] = df["VARIABLE"].replace({
+        "PresiÃ³n1": "Presion1",
+        "Volt_baterÃ­a": "Volt_bateria",
+        "Volt_baterÃ-a": "Volt_bateria",
+    })
+    df["VARIABLE"] = (
+        df["VARIABLE"]
+        .str.replace("PresiÃ³n1", "Presion1", regex=False)
+        .str.replace("Volt_baterÃ­a", "Volt_bateria", regex=False)
+        .str.replace("Volt_baterÃ-a", "Volt_bateria", regex=False)
+    )
 
     cursor = conn_target.cursor()
     query_insert = """
@@ -213,7 +227,8 @@ def ejecutar_sincronizacion_cello(
             VALUES (%s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE 
             VALOR = VALUES(VALOR), 
-            FECHA_HORA_LOGGER = VALUES(FECHA_HORA_LOGGER)
+            FECHA_HORA_LOGGER = VALUES(FECHA_HORA_LOGGER),
+            VARIABLE = VALUES(VARIABLE)
         """
 
     tuples = [tuple(x) for x in df.to_numpy()]
@@ -272,7 +287,7 @@ if "intervalo_minutos_sel" not in st.session_state:
   st.session_state.intervalo_minutos_sel = 5
 
 # ==========================================
-# 6. BARRA LATERAL (IDÉNTICA A TU IMAGEN)
+# 6. BARRA LATERAL (PANEL LEVANTAMIENTOS MIAA)
 # ==========================================
 with st.sidebar:
   st.image(
